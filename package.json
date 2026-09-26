@@ -1,0 +1,44 @@
+{
+  "name": "@le-space/ucep",
+  "version": "0.2.0-draft.0",
+  "description": "Reference implementation of the Universal Connectivity Extension Protocol (UCEP): extensions, pairing and scopes between libp2p peers",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test --test-reporter=spec \"test/*.test.js\"",
+    "generate": "scripts/generate.sh",
+    "lint": "prettier --check src test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Le-Space/ucep-js.git"
+  },
+  "dependencies": {
+    "@libp2p/interface": "3.3.0",
+    "@libp2p/peer-id": "6.0.15",
+    "@libp2p/utils": "7.4.1",
+    "@multiformats/multiaddr": "13.0.3",
+    "libp2p": "3.3.11",
+    "protons-runtime": "8.0.1",
+    "uint8arraylist": "3.0.2",
+    "uint8arrays": "6.1.1"
+  },
+  "devDependencies": {
+    "@chainsafe/libp2p-noise": "17.0.0",
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/identify": "4.1.14",
+    "@libp2p/memory": "2.0.28",
+    "esbuild": "0.28.2",
+    "prettier": "3.6.2",
+    "protons": "10.0.5"
+  }
+}
