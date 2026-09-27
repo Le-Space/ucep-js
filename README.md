@@ -1,6 +1,6 @@
 # @le-space/ucep
 
-Reference implementation of the **Universal Connectivity Extension Protocol (UCEP)**, wire revision 2: one libp2p peer offers an *extension* – named commands – and others discover it, call it, and pair with it for the commands that need permission.
+Reference implementation of the **Universal Connectivity Extension Protocol (UCEP)**, wire revision 2: one libp2p peer offers an _extension_ – named commands – and others discover it, call it, and pair with it for the commands that need permission.
 
 Spec: [Le-Space/ucep-spec](https://github.com/Le-Space/ucep-spec) (Working Draft). This library follows it and passes its test vectors.
 
@@ -12,52 +12,57 @@ Spec: [Le-Space/ucep-spec](https://github.com/Le-Space/ucep-spec) (Working Draft
 ## Provider
 
 ```js
-import { createProvider } from '@le-space/ucep'
+import { createProvider } from '@le-space/ucep';
 
 const provider = createProvider({
-  libp2p,
-  manifest: {
-    id: 'invoice',
-    name: 'Rechnungen',
-    version: '0.1.0',
-    scopes: [{ name: 'invoice:eigenbeleg:create', description: 'Eigenbelege erstellen' }]
-  },
-  commands: {
-    help: { handler: () => ({ commands: ['help', 'create-eigenbeleg'] }) },
-    'create-eigenbeleg': {
-      scope: 'invoice:eigenbeleg:create',
-      idempotent: true,
-      handler: async ({ argsJson, grant }) => ({ number: 'EB-2026-001' })
-    }
-  }
-})
-await provider.start()
+	libp2p,
+	manifest: {
+		id: 'invoice',
+		name: 'Rechnungen',
+		version: '0.1.0',
+		scopes: [{ name: 'invoice:eigenbeleg:create', description: 'Eigenbelege erstellen' }]
+	},
+	commands: {
+		help: { handler: () => ({ commands: ['help', 'create-eigenbeleg'] }) },
+		'create-eigenbeleg': {
+			scope: 'invoice:eigenbeleg:create',
+			idempotent: true,
+			handler: async ({ argsJson, grant }) => ({ number: 'EB-2026-001' })
+		}
+	}
+});
+await provider.start();
 
 // Invitation: show `uri` as a QR code
-const { uri } = await provider.createInvitation({ scopes: ['invoice:eigenbeleg:create'] })
+const { uri } = await provider.createInvitation({ scopes: ['invoice:eigenbeleg:create'] });
 
 // In-band: open a window, show the code, let the human type what the other app shows
-provider.openPairingWindow()
+provider.openPairingWindow();
 provider.events.addEventListener('pairing:pending', ({ detail }) => {
-  // detail: { mode, id, peerId, label, did, scopes, sas }
-})
-await provider.approve(id, { code: typedByHuman })
+	// detail: { mode, id, peerId, label, did, scopes, sas }
+});
+await provider.approve(id, { code: typedByHuman });
 ```
 
 ## Consumer
 
 ```js
-import { createConsumer } from '@le-space/ucep'
+import { createConsumer } from '@le-space/ucep';
 
-const consumer = createConsumer({ libp2p, label: 'Belege, Laptop' })
-await consumer.start()
+const consumer = createConsumer({ libp2p, label: 'Belege, Laptop' });
+await consumer.start();
 
-await consumer.addProvider(pastedPeerIdOrLink)     // lists what the provider serves
-await consumer.pairWithInvitation(scannedText)      // or:
-await consumer.pairInBand(peerId, 'invoice', { scopes: ['invoice:eigenbeleg:create'], onCode: showBig })
+await consumer.addProvider(pastedPeerIdOrLink); // lists what the provider serves
+await consumer.pairWithInvitation(scannedText); // or:
+await consumer.pairInBand(peerId, 'invoice', {
+	scopes: ['invoice:eigenbeleg:create'],
+	onCode: showBig
+});
 
-const result = await consumer.call(peerId, 'invoice', 'create-eigenbeleg', { reason: '…' })
+const result = await consumer.call(peerId, 'invoice', 'create-eigenbeleg', { reason: '…' });
 ```
+
+Through a relay (two browsers), the consumer reuses the connection it has: libp2p would open a new relayed connection for every call, and a provider refuses more than five a second from the relay's address. Once a minute per peer it lets libp2p dial anyway, which may come back direct (WebRTC).
 
 Grants and the catalogue live in memory by default; pass `store` with your own key-value stores to keep them across restarts (the spec asks for it, together with a stable libp2p key).
 

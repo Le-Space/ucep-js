@@ -1,6 +1,6 @@
 {
   "name": "@le-space/ucep",
-  "version": "0.2.0-draft.0",
+  "version": "0.2.0-draft.1",
   "description": "Reference implementation of the Universal Connectivity Extension Protocol (UCEP): extensions, pairing and scopes between libp2p peers",
   "license": "MIT",
   "type": "module",
@@ -35,8 +35,10 @@
   "devDependencies": {
     "@chainsafe/libp2p-noise": "17.0.0",
     "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/circuit-relay-v2": "^4.2.9",
     "@libp2p/identify": "4.1.14",
     "@libp2p/memory": "2.0.28",
+    "@libp2p/websockets": "^10.1.17",
     "esbuild": "0.28.2",
     "prettier": "3.6.2",
     "protons": "10.0.5"

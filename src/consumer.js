@@ -33,6 +33,12 @@ import {
 } from './transcript.js';
 
 const CHECK_INTERVAL_MS = 60_000;
+/**
+ * How often a new connection is tried to a peer reached only through a relay:
+ * the try may come back direct (WebRTC), which a relayed one never is, but
+ * libp2p opens a new relayed connection for every dial otherwise.
+ */
+const UPGRADE_INTERVAL_MS = 60_000;
 
 /**
  * @typedef {object} CatalogueEntry one extension on one provider (ucep.md §4.1)
@@ -78,10 +84,38 @@ export function createConsumer({
 	const catalogue = store.catalogue ?? memoryStore();
 	/** @type {Map<string, number>} last online check per peer */
 	const checked = new Map();
+	/** @type {Map<string, number>} when a new connection was last tried, per peer */
+	const upgradeTried = new Map();
 	const events = new EventTarget();
 	const changed = () => events.dispatchEvent(new CustomEvent('catalogue:change'));
 	const key = (/** @type {string} */ peer, /** @type {string} */ protocol) => `${peer}|${protocol}`;
 	const grantKey = (/** @type {string} */ peer, /** @type {string} */ id) => `${peer}|${id}`;
+
+	/**
+	 * An open connection to reuse, or null to dial.
+	 *
+	 * A direct connection is always reused. A relayed (limited) one is too,
+	 * except at most once a minute per peer, when libp2p is left to dial: that
+	 * dial may come back direct. Without this, libp2p opens a new relayed
+	 * connection for every call while the only one is limited, and the
+	 * provider refuses them once more than five a second arrive from the
+	 * relay's address (libp2p's inbound threshold).
+	 *
+	 * @param {import('@libp2p/interface').PeerId} id
+	 * @returns {import('@libp2p/interface').Connection | null}
+	 */
+	function reusable(id) {
+		const open = libp2p.getConnections(id).filter((c) => c.status === 'open');
+		const direct = open.find((c) => c.limits == null);
+		if (direct) return direct;
+		if (!open.length) return null;
+		const peer = id.toString();
+		if (now() - (upgradeTried.get(peer) ?? 0) >= UPGRADE_INTERVAL_MS) {
+			upgradeTried.set(peer, now());
+			return null;
+		}
+		return open[0];
+	}
 
 	/**
 	 * One request, one response (ucep.md §5).
@@ -95,10 +129,16 @@ export function createConsumer({
 		const id = typeof peer === 'string' ? peerIdFromString(peer) : peer;
 		const s = signal ?? AbortSignal.timeout(TIMEOUTS.answer);
 		const target = addrs.length ? addrs.map((a) => multiaddr(a)) : id;
-		const stream = await libp2p.dialProtocol(target, protocol, {
-			runOnLimitedConnection: true,
-			signal: s
-		});
+		const existing = reusable(id);
+		const stream =
+			(existing &&
+				(await existing
+					.newStream(protocol, { runOnLimitedConnection: true, signal: s })
+					.catch(() => null))) ||
+			(await libp2p.dialProtocol(target, protocol, {
+				runOnLimitedConnection: true,
+				signal: s
+			}));
 		try {
 			const pb = pbStream(stream, { maxDataLength: LIMITS.response });
 			await pb.write(request, ext.Request, { signal: s });
@@ -256,9 +296,11 @@ export function createConsumer({
 		};
 		libp2p.addEventListener('peer:identify', listener);
 		try {
-			const connection = await libp2p.dial(addrs.length ? addrs.map((a) => multiaddr(a)) : id, {
-				signal: AbortSignal.timeout(TIMEOUTS.online)
-			});
+			const connection =
+				reusable(id) ??
+				(await libp2p.dial(addrs.length ? addrs.map((a) => multiaddr(a)) : id, {
+					signal: AbortSignal.timeout(TIMEOUTS.online)
+				}));
 			const known = await libp2p.peerStore.get(id).catch(() => null);
 			const protocols = known?.protocols.length
 				? known.protocols
