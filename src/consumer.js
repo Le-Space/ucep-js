@@ -301,10 +301,20 @@ export function createConsumer({
 				(await libp2p.dial(addrs.length ? addrs.map((a) => multiaddr(a)) : id, {
 					signal: AbortSignal.timeout(TIMEOUTS.online)
 				}));
+			// What the peer store knows counts only once it names an extension:
+			// libp2p records `/ipfs/id/1.0.0` as soon as it opens the identify
+			// stream, long before identify has answered. Over a relay with real
+			// latency, reading that meant UNKNOWN_EXTENSION for a provider that
+			// serves the extension.
 			const known = await libp2p.peerStore.get(id).catch(() => null);
-			const protocols = known?.protocols.length
+			const protocols = known?.protocols.some((p) => parseProtocolId(p))
 				? known.protocols
-				: await Promise.race([identified, wait(TIMEOUTS.online).then(() => [])]);
+				: await Promise.race([
+						identified,
+						wait(TIMEOUTS.online).then(
+							async () => (await libp2p.peerStore.get(id).catch(() => null))?.protocols ?? []
+						)
+					]);
 			await seen(peer, protocols);
 			return { connection, protocols };
 		} finally {
