@@ -9,6 +9,8 @@ Spec: [Le-Space/ucep-spec](https://github.com/Le-Space/ucep-spec) (Working Draft
 - **Pairing**: with an invitation (QR code or link, `web+ucep:pair?…`, HMAC proof bound to both PeerIds), or in-band over libp2p (commit and reveal, the same six-digit code on both screens, the provider's human approves). Optional DID binding: `did:key` Ed25519 or P-256, signed directly or by a passkey (WebAuthn).
 - Plain JavaScript (ESM, JSDoc), libp2p 3, WebCrypto only: runs in browsers and in Node 22+.
 
+How it runs between peers, step by step, and the extensions in use today: [docs/sequences.md](docs/sequences.md).
+
 ## Provider
 
 ```js
