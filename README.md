@@ -43,6 +43,7 @@ provider.openPairingWindow();
 provider.events.addEventListener('pairing:pending', ({ detail }) => {
 	// detail: { mode, id, peerId, label, did, scopes, sas }
 });
+// The code is required: without the one the other app shows, nothing is approved.
 await provider.approve(id, { code: typedByHuman });
 ```
 
@@ -76,7 +77,8 @@ npm test
 
 - the spec's test vectors (invitation URI, transcripts, proofs, codes, DID signatures);
 - DID binding with fresh Ed25519 and P-256 keys, including a passkey assertion;
-- two and three real libp2p nodes over the in-memory transport (Noise, Yamux, identify): discovery and manifest, scopes and error codes, idempotency, both pairing modes, a DID bound and a DID faked, revocation and unpairing, a provider going offline and an extension withdrawn.
+- two and three real libp2p nodes over the in-memory transport (Noise, Yamux, identify): discovery and manifest, scopes and error codes, idempotency, both pairing modes, a DID bound and a DID faked, revocation and unpairing, a provider going offline and an extension withdrawn;
+- hardening: two peers racing for one invitation, a grant revoked while its command runs, a retry while an idempotent command still runs, the bound on kept results, approving without the code, an overlong `did:key`.
 
 ## Protobuf
 
