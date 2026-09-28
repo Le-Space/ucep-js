@@ -1,6 +1,6 @@
 {
   "name": "@le-space/ucep",
-  "version": "0.2.0-draft.3",
+  "version": "0.2.0-draft.4",
   "description": "Reference implementation of the Universal Connectivity Extension Protocol (UCEP): extensions, pairing and scopes between libp2p peers",
   "license": "MIT",
   "type": "module",

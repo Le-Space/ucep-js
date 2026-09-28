@@ -168,6 +168,49 @@ describe('hardening', () => {
 		assert.deepEqual((await pairing).scopes, ['invoice:document:read']);
 	});
 
+	test('what the provider stores has no undefined field (a dag-cbor store refuses one)', async () => {
+		/** @param {unknown} v @returns {boolean} */
+		const hasUndefined = (v) =>
+			v === undefined ||
+			(v !== null && typeof v === 'object' && Object.values(v).some(hasUndefined));
+		/** @type {Map<string, any>} */
+		const kept = new Map();
+		const strict = {
+			get: async (/** @type {string} */ k) => kept.get(k),
+			set: async (/** @type {string} */ k, /** @type {any} */ v) => {
+				if (hasUndefined(v)) throw new Error(`undefined in ${k}`);
+				kept.set(k, v);
+			},
+			delete: async (/** @type {string} */ k) => void kept.delete(k),
+			values: async () => [...kept.values()]
+		};
+		const strictNode = await node('strict');
+		nodes.push(strictNode);
+		const confirming = createProvider({
+			libp2p: strictNode,
+			manifest: MANIFEST,
+			commands: { help: { handler: () => ({}) } },
+			confirmInvitations: true,
+			store: { invitations: strict, grants: strict }
+		});
+		await confirming.start();
+		/** @type {any} */ let shown = null;
+		confirming.events.addEventListener(
+			'pairing:pending',
+			(e) => (shown = /** @type {CustomEvent} */ (e).detail),
+			{
+				once: true
+			}
+		);
+		await nodes[1].dial(strictNode.getMultiaddrs());
+		const { uri } = await confirming.createInvitation({ scopes: ['invoice:document:read'] });
+		const pairing = a.pairWithInvitation(uri, { onCode: () => {} });
+		await until(() => shown !== null);
+		await confirming.approve(shown.id, { code: shown.sas });
+		assert.deepEqual((await pairing).scopes, ['invoice:document:read']);
+		await confirming.stop();
+	});
+
 	test('an overlong did:key is refused before it is decoded', () => {
 		assert.throws(() => parseDidKey(`did:key:z${'1'.repeat(10_000)}`), /too long/);
 	});

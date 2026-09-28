@@ -651,9 +651,10 @@ export function createProvider({
 				throw new UcepError('PAIRING_DENIED', 'The codes differ');
 			if (fewer && !fewer.every((s) => offered.includes(s)))
 				throw new Error('More scopes than asked');
-			if (p) Object.assign(p, { decision: 'approved', approvedScopes: fewer });
-			else if (inv)
-				await invitations.set(id, { ...inv, decision: 'approved', approvedScopes: fewer });
+			// No undefined field: a store may encode what it keeps (dag-cbor has no undefined).
+			const decision = { decision: 'approved', ...(fewer ? { approvedScopes: fewer } : {}) };
+			if (p) Object.assign(p, decision);
+			else if (inv) await invitations.set(id, { ...inv, ...decision });
 		},
 
 		/** @param {string} id */
