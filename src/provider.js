@@ -28,6 +28,8 @@ import {
 const IDEMPOTENT_MS = 24 * 3600 * 1000;
 const PENDING_MS = 2 * 60 * 1000;
 const MAX_FAILED_PAIRINGS = 5;
+/** Idempotent results kept per consumer: the oldest go first. */
+const MAX_DONE_PER_PEER = 256;
 
 /**
  * @typedef {object} CommandContext
@@ -127,12 +129,45 @@ export function createProvider({
 	/** in-band pairings, by pairingId; never persisted (§11) */
 	/** @type {Map<string, any>} */
 	const inBand = new Map();
-	/** requestId → response, for idempotent commands */
-	/** @type {Map<string, { at: number, response: any }>} */
+	/** peer → requestId → response, for idempotent commands */
+	/** @type {Map<string, Map<string, { at: number, response: any }>>} */
 	const done = new Map();
+	/** peer|requestId → the answer being made: a retry waits for it */
+	/** @type {Map<string, Promise<any>>} */
+	const running = new Map();
+	/** Grants revoked on this run: a command still running does not write them back. */
+	const revoked = new Set();
+	/** One pairing at a time per invitation, so it is used once. */
+	/** @type {Map<string, Promise<unknown>>} */
+	const locks = new Map();
 	let windowUntil = 0;
 	const events = new EventTarget();
 	const self = () => libp2p.peerId.toString();
+
+	/**
+	 * Run `fn` after every earlier call under `key` has finished.
+	 *
+	 * @template T
+	 * @param {string} key
+	 * @param {() => Promise<T>} fn
+	 * @returns {Promise<T>}
+	 */
+	function serialized(key, fn) {
+		const before = locks.get(key) ?? Promise.resolve();
+		const run = before.then(fn, fn);
+		const tail = run.catch(() => {});
+		locks.set(key, tail);
+		tail.then(() => {
+			if (locks.get(key) === tail) locks.delete(key);
+		});
+		return run;
+	}
+
+	/** @param {Grant} g */
+	async function forget(g) {
+		revoked.add(g.grantId);
+		await grants.delete(g.grantId);
+	}
 
 	/** @param {string} type @param {unknown} detail */
 	const emit = (type, detail) => events.dispatchEvent(new CustomEvent(type, { detail }));
@@ -176,7 +211,7 @@ export function createProvider({
 	 */
 	async function grant(peer, granted, label, did) {
 		const old = await grantOf(peer);
-		if (old) await grants.delete(old.grantId);
+		if (old) await forget(old);
 		const at = now();
 		/** @type {Grant} */
 		const g = {
@@ -228,15 +263,19 @@ export function createProvider({
 			did: req.did
 		});
 		const expected = await pairingProof(fromHex(inv.secretHex), transcript);
-		if (!constantTimeEqual(expected, req.proof ?? new Uint8Array())) {
+		/** A wrong proof or signature counts; enough of them use the invitation up. */
+		const failed = async (/** @type {string} */ code) => {
 			inv.failures += 1;
-			if (inv.failures >= MAX_FAILED_PAIRINGS) inv.state = 'used';
+			if (inv.failures >= MAX_FAILED_PAIRINGS) Object.assign(inv, { state: 'used', secretHex: '' });
 			await invitations.set(inv.invitationId, inv);
-			return denied('PAIRING_PROOF_INVALID');
+			return denied(code);
+		};
+		if (!constantTimeEqual(expected, req.proof ?? new Uint8Array())) {
+			return failed('PAIRING_PROOF_INVALID');
 		}
 		const hash = await transcriptHash(transcript);
 		if (req.did && !(await verifyDidProof(req.did, req.didProof ?? {}, hash))) {
-			return denied('DID_SIGNATURE_INVALID');
+			return failed('DID_SIGNATURE_INVALID');
 		}
 		if (confirmInvitations && inv.decision !== 'approved') {
 			if (inv.decision === 'denied') {
@@ -376,9 +415,48 @@ export function createProvider({
 			if (g.expiresAt && g.expiresAt < now()) return fail('GRANT_EXPIRED');
 			if (!g.scopes.includes(c.scope)) return fail('SCOPE_MISSING');
 		}
+		if (!c.idempotent) return run(req, c, g, connection, fail);
 		const key = `${peer}|${req.requestId}`;
-		const earlier = c.idempotent ? done.get(key) : undefined;
+		const earlier = done.get(peer)?.get(req.requestId);
 		if (earlier && earlier.at > now() - IDEMPOTENT_MS) return earlier.response;
+		// The same request while the first still runs: its answer, not a second run.
+		const inFlight = running.get(key);
+		if (inFlight) return inFlight;
+		const answer = run(req, c, g, connection, fail);
+		running.set(key, answer);
+		try {
+			const response = await answer;
+			if (response.command.success) keep(peer, req.requestId, response);
+			return response;
+		} finally {
+			running.delete(key);
+		}
+	}
+
+	/**
+	 * @param {string} peer @param {string} requestId @param {any} response
+	 */
+	function keep(peer, requestId, response) {
+		const at = now();
+		for (const [p, results] of done) {
+			for (const [id, v] of results) if (v.at < at - IDEMPOTENT_MS) results.delete(id);
+			if (!results.size) done.delete(p);
+		}
+		let mine = done.get(peer);
+		if (!mine) done.set(peer, (mine = new Map()));
+		mine.delete(requestId);
+		mine.set(requestId, { at, response });
+		while (mine.size > MAX_DONE_PER_PEER)
+			mine.delete(/** @type {string} */ (mine.keys().next().value));
+	}
+
+	/**
+	 * @param {any} req @param {Command} c @param {Grant | null} g
+	 * @param {import('@libp2p/interface').Connection} connection
+	 * @param {(code: string, error?: string) => any} fail
+	 */
+	async function run(req, c, g, connection, fail) {
+		const peer = connection.remotePeer.toString();
 
 		/** @type {Record<string, unknown> | null} */
 		let argsJson = null;
@@ -415,15 +493,24 @@ export function createProvider({
 		if (text !== undefined && new TextEncoder().encode(text).length > max - 256) {
 			return fail('TOO_LARGE', limited ? 'open a direct connection first' : '');
 		}
-		if (g) await grants.set(g.grantId, { ...g, lastUsedAt: now() });
-		const response = {
+		if (g) await touch(g.grantId);
+		return {
 			command: { requestId: req.requestId, success: true, data: text, timestamp: BigInt(now()) }
 		};
-		if (c.idempotent) {
-			done.set(key, { at: now(), response });
-			for (const [k, v] of done) if (v.at < now() - IDEMPOTENT_MS) done.delete(k);
-		}
-		return response;
+	}
+
+	/**
+	 * Note when a grant was last used — unless it was revoked meanwhile (while
+	 * the command ran, or while this very write ran): a revoked grant stays so.
+	 *
+	 * @param {string} grantId
+	 */
+	async function touch(grantId) {
+		if (revoked.has(grantId)) return;
+		const current = await grants.get(grantId);
+		if (!current || revoked.has(grantId)) return;
+		await grants.set(grantId, { ...current, lastUsedAt: now() });
+		if (revoked.has(grantId)) await grants.delete(grantId);
 	}
 
 	/** @param {any} req @param {import('@libp2p/interface').Connection} connection */
@@ -436,7 +523,8 @@ export function createProvider({
 			if (req.pair.extensionId !== manifest.id) return denied('UNKNOWN_EXTENSION');
 			if (req.pair.invitationId) {
 				if (!pairingModes.includes('INVITATION')) return denied('PAIRING_DISABLED');
-				return pairWithInvitation(req.pair, peer);
+				const id = String(req.pair.invitationId);
+				return serialized(`invitation|${id}`, () => pairWithInvitation(req.pair, peer));
 			}
 			return pairInBand(req.pair, peer);
 		}
@@ -445,7 +533,7 @@ export function createProvider({
 			if (!g || g.consumerPeerId !== peer) {
 				return { unpair: { success: false, errorCode: 'INVALID_ARGUMENTS' } };
 			}
-			await grants.delete(g.grantId);
+			await forget(g);
 			emit('grant:revoked', g);
 			return { unpair: { success: true } };
 		}
@@ -545,18 +633,21 @@ export function createProvider({
 
 		/**
 		 * Approve a pending pairing. `code` is what the human typed: it must be
-		 * the SAS the consumer shows (§5.2, RECOMMENDED).
+		 * the SAS the consumer shows (§5.2). Without it nothing is approved, so
+		 * an app cannot skip the comparison by mistake.
 		 *
 		 * @param {string} id pairingId or invitationId
-		 * @param {{ code?: string, scopes?: string[] }} [options]
+		 * @param {{ code: string, scopes?: string[] }} options
 		 */
-		async approve(id, { code, scopes: fewer } = {}) {
+		async approve(id, { code, scopes: fewer } = /** @type {any} */ ({})) {
 			const p = inBand.get(id);
 			const inv = p ? null : await invitations.get(id);
 			const sas = p ? p.sas : inv?.pendingSas;
 			const offered = p ? p.scopes : (inv?.scopes ?? []);
 			if (!sas) throw new Error('No pairing waits for approval under this id');
-			if (code !== undefined && code !== sas)
+			if (typeof code !== 'string' || !code)
+				throw new Error('Approve with the code the other app shows');
+			if (!constantTimeEqual(new TextEncoder().encode(code), new TextEncoder().encode(sas)))
 				throw new UcepError('PAIRING_DENIED', 'The codes differ');
 			if (fewer && !fewer.every((s) => offered.includes(s)))
 				throw new Error('More scopes than asked');
@@ -584,7 +675,7 @@ export function createProvider({
 		async revoke(grantId) {
 			const g = await grants.get(grantId);
 			if (g) {
-				await grants.delete(grantId);
+				await forget(g);
 				emit('grant:revoked', g);
 			}
 		}

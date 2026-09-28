@@ -68,6 +68,8 @@ export function decompressP256(compressed) {
  * @returns {{ type: 'Ed25519' | 'P-256', publicKey: Uint8Array }}
  */
 export function parseDidKey(did) {
+	// A did:key of either type is under 60 characters; base58 decoding is quadratic.
+	if (typeof did !== 'string' || did.length > 128) throw new Error('did:key too long');
 	if (!did.startsWith('did:key:z')) throw new Error('Only did:key with base58btc is supported');
 	const bytes = base58btcDecode(did.slice('did:key:z'.length));
 	if (bytes[0] === 0xed && bytes[1] === 0x01 && bytes.length === 34) {
