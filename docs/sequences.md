@@ -8,7 +8,7 @@ spec ([Le-Space/ucep-spec](https://github.com/Le-Space/ucep-spec): `ucep.md`,
 | Extension | Provider | Consumer | Pairing | Spec |
 |---|---|---|---|---|
 | `invoice` 0.1.0 | [Le-Space/invoice](https://github.com/Le-Space/invoice) (`app/src/lib/ucep/provider.js`) | [Le-Space/belege](https://github.com/Le-Space/belege) (`app/src/lib/ucep/consumer.js`) | invitation or in-band | `extensions/invoice.md` |
-| `belege-bridge` 0.1.0 | Belege on a desktop with its bridge (`app/src/lib/sync/remote-bridge.js`) | Belege on the person's other devices | none: only devices the books know are answered | issue Le-Space/belege#142 |
+| `belege-bridge` 0.1.0 | Belege on a desktop with its bridge (`app/src/lib/sync/remote-bridge.js`) | Belege on the person's other devices | none: only own devices that proved the passkey are answered | issue Le-Space/belege#142 |
 
 ## 1. Reaching each other through a relay
 
@@ -169,7 +169,12 @@ The bridge listens on the desktop's 127.0.0.1 only. A desktop that shares it
 serves the extension on its device-sync node; the phone's calls go through
 the desktop, which checks each against a fixed list and adds its own token,
 which never leaves it. There is no pairing: the provider answers only peers
-the books know as own devices.
+the books know as own devices **and** that proved, on this connection, that
+they hold the same passkey. That device proof is Belege's, not UCEP's: the
+sync node answers nothing but identify, the relay and the proof until a peer
+has given it, so a stranger or a relay never reaches the extension, not even
+its manifest. How it works and why it is sound:
+[Le-Space/belege docs/device-proof.md](https://github.com/Le-Space/belege/blob/main/docs/device-proof.md).
 
 ```mermaid
 sequenceDiagram
@@ -179,9 +184,12 @@ sequenceDiagram
     participant Br as Bridge on the desktop (127.0.0.1)
 
     Note over Ph,D: device-sync nodes, per-device peer keys, relay and/or WebRTC
-    Ph->>Ph: bridge on this device? no → a connected own device serving belege-bridge
+    Ph->>D: device proof: HMAC(key from the passkey, both peer ids)
+    D-->>Ph: device proof back
+    Note over Ph,D: only now is /uc/extension/belege-bridge/… reachable and named
+    Ph->>Ph: bridge on this device? no → a connected own device that proved, serving belege-bridge
     Ph->>D: request {method, path, body?}
-    D->>D: caller is a known, not removed own device (device:<peerId>)?
+    D->>D: caller proved the passkey and is a known, not removed own device (device:<peerId>)?
     D->>D: method and path on the allow list? (reading and asking only)
     D->>Br: the same call, with the desktop's own token
     Br-->>D: answer
