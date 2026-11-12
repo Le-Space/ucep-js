@@ -15,7 +15,15 @@ import { constantTimeEqual, fromHex, randomBytes, sha256, toBase64url, toHex } f
 import { verifyDidProof } from './did.js';
 import { encodeInvitation } from './links.js';
 import { ext } from './pb/messages.js';
-import { LIMITS, TIMEOUTS, UCEP_VERSION, UcepError, isScope, protocolId } from './protocol.js';
+import {
+	LIMITS,
+	TIMEOUTS,
+	UCEP_VERSION,
+	UcepError,
+	isLimited,
+	isScope,
+	protocolId
+} from './protocol.js';
 import { memoryStore } from './store.js';
 import {
 	inBandTranscript,
@@ -38,7 +46,7 @@ const MAX_DONE_PER_PEER = 256;
  * @property {string} peerId the caller, authenticated
  * @property {Grant | null} grant
  * @property {string} requestId
- * @property {boolean} limited the connection is relayed and limited
+ * @property {boolean} limited the connection is relayed with a data limit below `RELAY_BUDGET`: answers up to `LIMITS.limitedResponse`
  */
 
 /**
@@ -473,7 +481,7 @@ export function createProvider({
 		}
 		if (c.validate && !c.validate(argsJson, req.args)) return fail('INVALID_ARGUMENTS');
 
-		const limited = connection.limits != null;
+		const limited = isLimited(connection);
 		let data;
 		try {
 			data = await c.handler({

@@ -20,6 +20,30 @@ export const LIMITS = Object.freeze({
 	icon: 32 * 1024
 });
 
+/**
+ * A relayed connection counts as limited (ucep.md §11) unless its relay grants
+ * it at least this many bytes: then a full answer is a small part of what the
+ * connection may carry, as on a direct one. js-libp2p's default is 128 KiB per
+ * relayed connection; a relay that allows more says so in its limits.
+ */
+export const RELAY_BUDGET = 32 * 1024 * 1024;
+
+/**
+ * Whether answers on this connection are capped at `LIMITS.limitedResponse`:
+ * a relayed connection with a data limit below `RELAY_BUDGET`. A direct
+ * connection has no `limits`; a relayed one limited by time only has no
+ * `limits.bytes`.
+ *
+ * @param {{ limits?: { bytes?: bigint | number, seconds?: number } | null }} connection
+ * @returns {boolean}
+ */
+export function isLimited(connection) {
+	const limits = connection?.limits;
+	if (limits == null) return false;
+	if (limits.bytes == null) return false;
+	return BigInt(limits.bytes) < BigInt(RELAY_BUDGET);
+}
+
 /** Timeouts of ucep.md §5, in ms. */
 export const TIMEOUTS = Object.freeze({ read: 10_000, answer: 60_000, online: 15_000 });
 
