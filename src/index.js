@@ -7,9 +7,11 @@ export { createConsumer } from './consumer.js';
 export {
 	UCEP_VERSION,
 	LIMITS,
+	RELAY_BUDGET,
 	TIMEOUTS,
 	UcepError,
 	compatible,
+	isLimited,
 	isScope,
 	parseProtocolId,
 	protocolId
