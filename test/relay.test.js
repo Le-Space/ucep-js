@@ -91,3 +91,71 @@ describe('through a relay', () => {
 		assert.ok(connections[0].limits, 'the connection is the relayed one');
 	});
 });
+
+describe('a new connection that does not come', () => {
+	test('the call goes over the relayed connection that is open', async () => {
+		// Once a minute the consumer lets libp2p dial, in case a direct
+		// connection comes back. When that dial fails – a WebRTC upgrade that
+		// stalls, then libp2p refusing a second connection to the same relayed
+		// address ("Duplicate multiaddr connection") – the relayed connection
+		// is still there and still carries the call.
+		let clock = Date.now();
+		const late = createConsumer({ libp2p: consumerNode, label: 'Belege', now: () => clock });
+		await late.start();
+		const peer = providerNode.peerId.toString();
+		await late.addProvider(through);
+		await late.call(peer, 'invoice', 'help', {});
+		clock += 61_000;
+		const dialProtocol = consumerNode.dialProtocol.bind(consumerNode);
+		let refused = 0;
+		consumerNode.dialProtocol = async () => {
+			refused++;
+			const error = new Error('Duplicate multiaddr connection');
+			error.name = 'InvalidMultiaddrError';
+			throw error;
+		};
+		try {
+			const before = served;
+			const answer = await late.call(peer, 'invoice', 'help', {});
+			assert.equal(refused, 1, 'libp2p was left to dial once');
+			assert.equal(answer.served, before + 1);
+			const connections = consumerNode.getConnections(providerNode.peerId);
+			assert.equal(connections.length, 1);
+			assert.ok(connections[0].limits, 'over the relayed connection');
+		} finally {
+			consumerNode.dialProtocol = dialProtocol;
+			await late.stop?.();
+		}
+	});
+});
+
+describe('a dial that fails beside an open connection', () => {
+	test('the provider is found over the relayed connection that is open', async () => {
+		// The browser's case (Belege): the invitation names the provider's
+		// WebRTC address through the relay too. WebRTC does not come up, libp2p
+		// tries the relayed address next and refuses it as a duplicate of the
+		// relayed connection WebRTC was signalled over – which is open.
+		let clock = Date.now();
+		const fresh = createConsumer({ libp2p: consumerNode, label: 'Belege', now: () => clock });
+		await fresh.start();
+		assert.ok(consumerNode.getConnections(providerNode.peerId).length, 'a connection is open');
+		// A minute on: libp2p is left to dial again, in case it comes back direct.
+		clock += 61_000;
+		const dial = consumerNode.dial.bind(consumerNode);
+		let refused = 0;
+		consumerNode.dial = async () => {
+			refused++;
+			const error = new Error('Duplicate multiaddr connection');
+			error.name = 'InvalidMultiaddrError';
+			throw error;
+		};
+		try {
+			const found = await fresh.addProvider(through);
+			assert.equal(refused, 1, 'libp2p was left to dial once');
+			assert.equal(found.reachable, true);
+		} finally {
+			consumerNode.dial = dial;
+			await fresh.stop?.();
+		}
+	});
+});

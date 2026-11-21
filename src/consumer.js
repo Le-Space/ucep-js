@@ -92,6 +92,17 @@ export function createConsumer({
 	const grantKey = (/** @type {string} */ peer, /** @type {string} */ id) => `${peer}|${id}`;
 
 	/**
+	 * An open connection to the peer, a direct one first; null when there is none.
+	 *
+	 * @param {import('@libp2p/interface').PeerId} id
+	 * @returns {import('@libp2p/interface').Connection | null}
+	 */
+	function openConnection(id) {
+		const open = libp2p.getConnections(id).filter((c) => c.status === 'open');
+		return open.find((c) => c.limits == null) ?? open[0] ?? null;
+	}
+
+	/**
 	 * An open connection to reuse, or null to dial.
 	 *
 	 * A direct connection is always reused. A relayed (limited) one is too,
@@ -135,10 +146,16 @@ export function createConsumer({
 				(await existing
 					.newStream(protocol, { runOnLimitedConnection: true, signal: s })
 					.catch(() => null))) ||
-			(await libp2p.dialProtocol(target, protocol, {
-				runOnLimitedConnection: true,
-				signal: s
-			}));
+			(await libp2p
+				.dialProtocol(target, protocol, { runOnLimitedConnection: true, signal: s })
+				.catch(async (/** @type {unknown} */ error) => {
+					// The dial that might have come back direct did not (a WebRTC
+					// upgrade that stalled, then libp2p refusing a second connection
+					// to the same relayed address): the one that is open carries it.
+					const open = s.aborted ? null : openConnection(id);
+					if (!open) throw error;
+					return open.newStream(protocol, { runOnLimitedConnection: true, signal: s });
+				}));
 		try {
 			const pb = pbStream(stream, { maxDataLength: LIMITS.response });
 			await pb.write(request, ext.Request, { signal: s });
@@ -298,9 +315,20 @@ export function createConsumer({
 		try {
 			const connection =
 				reusable(id) ??
-				(await libp2p.dial(addrs.length ? addrs.map((a) => multiaddr(a)) : id, {
-					signal: AbortSignal.timeout(TIMEOUTS.online)
-				}));
+				(await libp2p
+					.dial(addrs.length ? addrs.map((a) => multiaddr(a)) : id, {
+						signal: AbortSignal.timeout(TIMEOUTS.online)
+					})
+					.catch((/** @type {unknown} */ error) => {
+						// An invitation names the provider's WebRTC address through
+						// the relay beside the relayed one. When WebRTC does not come
+						// up, libp2p goes on to the relayed address – and refuses it,
+						// since the relayed connection WebRTC was signalled over is
+						// already open to it. That one serves.
+						const open = openConnection(id);
+						if (!open) throw error;
+						return open;
+					}));
 			// What the peer store knows counts only once it names an extension:
 			// libp2p records `/ipfs/id/1.0.0` as soon as it opens the identify
 			// stream, long before identify has answered. Over a relay with real
