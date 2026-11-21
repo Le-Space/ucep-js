@@ -72,7 +72,11 @@ describe('UCEP over libp2p', () => {
 					})
 				},
 				status: { scope: 'invoice:document:read', handler: () => ({ state: 'created' }) },
-				big: { handler: () => ({ blob: 'x'.repeat(2 * 1024 * 1024) }) }
+				big: { handler: () => ({ blob: 'x'.repeat(2 * 1024 * 1024) }) },
+				// Answers after three seconds: longer than a caller may want to wait.
+				slow: {
+					handler: () => new Promise((r) => setTimeout(() => r({ late: true }), 3000))
+				}
 			}
 		});
 		await provider.start();
@@ -105,6 +109,15 @@ describe('UCEP over libp2p', () => {
 			'invoice:eigenbeleg:create'
 		);
 		assert.deepEqual((await consumer.call(providerId(), 'invoice', 'help')).commands.length, 3);
+	});
+
+	test('a call takes its own time limit; without one it waits for the answer', async () => {
+		const started = Date.now();
+		await assert.rejects(
+			consumer.call(providerId(), 'invoice', 'slow', {}, { signal: AbortSignal.timeout(300) })
+		);
+		assert.ok(Date.now() - started < 2000, 'given up after its own limit, not the answer');
+		assert.deepEqual(await consumer.call(providerId(), 'invoice', 'slow', {}), { late: true });
 	});
 
 	test('a scoped command needs pairing; errors carry their code', async () => {
