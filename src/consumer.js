@@ -434,21 +434,27 @@ export function createConsumer({
 		 * @param {string} extensionId
 		 * @param {string} command
 		 * @param {Record<string, unknown> | string[]} [args]
-		 * @param {{ requestId?: string, version?: string }} [options]
+		 * @param {{ requestId?: string, version?: string, signal?: AbortSignal }} [options]
+		 *   `signal`: how long this call may take; without it TIMEOUTS.answer
 		 */
-		async call(peer, extensionId, command, args = {}, { requestId, version } = {}) {
+		async call(peer, extensionId, command, args = {}, { requestId, version, signal } = {}) {
 			const protocol = await protocolOf(peer, extensionId, version);
 			const id = requestId ?? toBase64url(randomBytes(16));
-			const res = await exchange(peer, protocol, {
-				command: {
-					requestId: id,
-					extensionId,
-					command,
-					args: Array.isArray(args) ? args : [],
-					argsJson: Array.isArray(args) ? undefined : JSON.stringify(args),
-					timestamp: BigInt(now())
-				}
-			});
+			const res = await exchange(
+				peer,
+				protocol,
+				{
+					command: {
+						requestId: id,
+						extensionId,
+						command,
+						args: Array.isArray(args) ? args : [],
+						argsJson: Array.isArray(args) ? undefined : JSON.stringify(args),
+						timestamp: BigInt(now())
+					}
+				},
+				signal ? { signal } : {}
+			);
 			const c = res.command;
 			if (!c || c.requestId !== id) throw new UcepError('INTERNAL', 'answer to another request');
 			if (!c.success) {
