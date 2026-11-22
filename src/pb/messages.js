@@ -61,6 +61,10 @@ var ext;
               ext2.ScopeInfo.codec().encode(value, w);
             }
           }
+          if (obj.limits != null) {
+            w.uint32(98);
+            ext2.Limits.codec().encode(obj.limits, w);
+          }
           if (opts.lengthDelimited !== false) {
             w.ldelim();
           }
@@ -137,6 +141,12 @@ var ext;
                 obj.scopes.push(ext2.ScopeInfo.codec().decode(r, r.uint32(), {
                   limits: opts.limits?.scopes$
                 }));
+                break;
+              }
+              case 12: {
+                obj.limits = ext2.Limits.codec().decode(r, r.uint32(), {
+                  limits: opts.limits?.limits
+                });
                 break;
               }
               default: {
@@ -261,6 +271,12 @@ var ext;
                 obj.scopes++;
                 break;
               }
+              case 12: {
+                yield* ext2.Limits.codec().stream(r, r.uint32(), `${prefix}limits.`, {
+                  limits: opts.limits?.limits
+                });
+                break;
+              }
               default: {
                 r.skipType(tag & 7);
                 break;
@@ -291,6 +307,106 @@ var ext;
     }
     ExtensionManifest2.stream = stream2;
   })(ExtensionManifest = ext2.ExtensionManifest || (ext2.ExtensionManifest = {}));
+  let Limits;
+  ((Limits2) => {
+    let _codec2;
+    Limits2.codec = () => {
+      if (_codec2 == null) {
+        _codec2 = message((obj, w, opts = {}) => {
+          if (opts.lengthDelimited !== false) {
+            w.fork();
+          }
+          if (obj.request != null && obj.request !== 0) {
+            w.uint32(8);
+            w.uint32(obj.request);
+          }
+          if (obj.response != null && obj.response !== 0) {
+            w.uint32(16);
+            w.uint32(obj.response);
+          }
+          if (opts.lengthDelimited !== false) {
+            w.ldelim();
+          }
+        }, (r, length) => {
+          const obj = {
+            request: 0,
+            response: 0
+          };
+          const end = length == null ? r.len : r.pos + length;
+          while (r.pos < end) {
+            const tag = r.uint32();
+            switch (tag >>> 3) {
+              case 1: {
+                obj.request = r.uint32();
+                break;
+              }
+              case 2: {
+                obj.response = r.uint32();
+                break;
+              }
+              default: {
+                r.skipType(tag & 7);
+                break;
+              }
+            }
+          }
+          return obj;
+        }, function* (r, length, prefix) {
+          const end = length == null ? r.len : r.pos + length;
+          if (prefix !== ".") {
+            yield {
+              field: prefix.endsWith(".") ? prefix.substring(0, prefix.length - 1) : prefix,
+              type: "start",
+              message: "ext.Limits"
+            };
+          }
+          while (r.pos < end) {
+            const tag = r.uint32();
+            switch (tag >>> 3) {
+              case 1: {
+                yield {
+                  field: `${prefix}request`,
+                  value: r.uint32()
+                };
+                break;
+              }
+              case 2: {
+                yield {
+                  field: `${prefix}response`,
+                  value: r.uint32()
+                };
+                break;
+              }
+              default: {
+                r.skipType(tag & 7);
+                break;
+              }
+            }
+          }
+          if (prefix !== ".") {
+            yield {
+              field: prefix.endsWith(".") ? prefix.substring(0, prefix.length - 1) : prefix,
+              type: "end",
+              message: "ext.Limits"
+            };
+          }
+        });
+      }
+      return _codec2;
+    };
+    function encode2(obj) {
+      return encodeMessage(obj, Limits2.codec());
+    }
+    Limits2.encode = encode2;
+    function decode2(buf, opts) {
+      return decodeMessage(buf, Limits2.codec(), opts);
+    }
+    Limits2.decode = decode2;
+    function stream2(buf, opts) {
+      return streamMessage(buf, Limits2.codec(), opts);
+    }
+    Limits2.stream = stream2;
+  })(Limits = ext2.Limits || (ext2.Limits = {}));
   let PairingMode;
   ((PairingMode2) => {
     PairingMode2["PAIRING_MODE_UNSPECIFIED"] = "PAIRING_MODE_UNSPECIFIED";

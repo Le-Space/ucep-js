@@ -11,7 +11,11 @@ const EXTENSION_ID = /^[a-z0-9-]{1,64}$/;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$/;
 const SCOPE = /^([a-z0-9-]+):([a-z0-9-]+):([a-z0-9-]+)$/;
 
-/** Limits of ucep.md §11, in bytes. */
+/**
+ * Limits of ucep.md §11, in bytes: the defaults, which hold unless an
+ * extension states larger ones in its manifest (§11.1), and always on a
+ * limited connection.
+ */
 export const LIMITS = Object.freeze({
 	request: 64 * 1024,
 	response: 1024 * 1024,
@@ -19,6 +23,59 @@ export const LIMITS = Object.freeze({
 	requestId: 128,
 	icon: 32 * 1024
 });
+
+/** The largest limit the manifest's uint32 fields can state. */
+const MAX_STATED = 2 ** 32 - 1;
+
+/**
+ * @typedef {object} MessageLimits
+ * @property {number} request bytes of a Request message
+ * @property {number} response bytes of a Response message
+ */
+
+/**
+ * The limits an extension states in its manifest (ucep.md §11.1): a field
+ * that is absent, 0 or below the default means the default.
+ *
+ * @param {{ limits?: { request?: number, response?: number } | null } | null | undefined} manifest
+ * @returns {MessageLimits}
+ */
+export function statedLimits(manifest) {
+	const l = manifest?.limits;
+	/** @param {unknown} v @param {number} fallback */
+	const pick = (v, fallback) => {
+		const n = Number(v ?? 0);
+		return Number.isFinite(n) && n > fallback ? Math.min(n, MAX_STATED) : fallback;
+	};
+	return {
+		request: pick(l?.request, LIMITS.request),
+		response: pick(l?.response, LIMITS.response)
+	};
+}
+
+/**
+ * Check a provider's or consumer's own `limits` option: whole bytes, at most
+ * what the manifest can state. `floor` is the least a provider may accept.
+ *
+ * @param {Partial<MessageLimits> | undefined} limits
+ * @param {{ floor?: boolean }} [options]
+ * @returns {MessageLimits}
+ */
+export function ownLimits(limits, { floor = false } = {}) {
+	/** @param {'request' | 'response'} name */
+	const one = (name) => {
+		const v = limits?.[name];
+		if (v === undefined) return LIMITS[name];
+		if (!Number.isSafeInteger(v) || v <= 0 || v > MAX_STATED) {
+			throw new Error(`limits.${name} must be a whole number of bytes up to ${MAX_STATED}`);
+		}
+		if (floor && v < LIMITS[name]) {
+			throw new Error(`limits.${name} may not be below the default of ${LIMITS[name]} bytes`);
+		}
+		return v;
+	};
+	return { request: one('request'), response: one('response') };
+}
 
 /**
  * A relayed connection counts as limited (ucep.md §11) unless its relay grants
@@ -100,10 +157,14 @@ export class UcepError extends Error {
 	/**
 	 * @param {string} code an ErrorCode name, e.g. PAIRING_REQUIRED
 	 * @param {string} [message]
+	 * @param {{ limit?: number, part?: 'request' | 'response' }} [details] for a TOO_LARGE the
+	 *   consumer found itself: `limit`, the bytes that were allowed, and `part`, what was too large
 	 */
-	constructor(code, message = code) {
+	constructor(code, message = code, details = {}) {
 		super(message);
 		this.name = 'UcepError';
 		this.code = code;
+		if (details.limit !== undefined) this.limit = details.limit;
+		if (details.part !== undefined) this.part = details.part;
 	}
 }
