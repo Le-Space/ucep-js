@@ -443,10 +443,12 @@ export function createConsumer({
 		 *
 		 * @param {string} peer
 		 * @param {string} extensionId
-		 * @param {{ version?: string, fetch?: boolean }} [options] `fetch`: ask for the manifest when it is not known yet
+		 * @param {{ version?: string, fetch?: boolean, refresh?: boolean }} [options] `fetch`: ask
+		 *   for the manifest when it is not known yet; `refresh`: ask for it anyway (the provider
+		 *   may have restarted with other limits)
 		 */
-		async limitsFor(peer, extensionId, { version, fetch = true } = {}) {
-			return limitsOf(peer, await protocolOf(peer, extensionId, version), { fetch });
+		async limitsFor(peer, extensionId, { version, fetch = true, refresh = false } = {}) {
+			return limitsOf(peer, await protocolOf(peer, extensionId, version), { fetch, refresh });
 		},
 
 		/**

@@ -16,7 +16,7 @@ import { identify, identifyPush } from '@libp2p/identify';
 import { circuitRelayServer, circuitRelayTransport } from '@libp2p/circuit-relay-v2';
 import { multiaddr } from '@multiformats/multiaddr';
 
-import { LIMITS, createConsumer, createProvider, statedLimits } from '../src/index.js';
+import { LIMITS, createConsumer, createProvider, memoryStore, statedLimits } from '../src/index.js';
 
 const MiB = 1024 * 1024;
 /** A text of about 300 KiB: above the default request, below 1 MiB. */
@@ -87,11 +87,33 @@ async function bridge(libp2p, limits) {
  */
 async function consumerOf(providerNode, limits) {
 	const consumerNode = await memoryNode('consumer');
-	const consumer = createConsumer({ libp2p: consumerNode, label: 'Belege (Test)', limits });
+	/** @type {import('../src/store.js').KeyValue<any>} */
+	const catalogue = memoryStore();
+	const consumer = createConsumer({
+		libp2p: consumerNode,
+		label: 'Belege (Test)',
+		limits,
+		store: { catalogue }
+	});
 	await consumer.start();
 	const added = await consumer.addProvider(providerNode.getMultiaddrs()[0].toString());
 	assert.equal(added.reachable, true);
-	return { consumer, consumerNode, peer: providerNode.peerId.toString() };
+	/**
+	 * Change the catalogue's copy of the manifest, once the background fetch
+	 * after identify has written it.
+	 *
+	 * @param {(manifest: any) => any} change
+	 */
+	async function editManifest(change) {
+		for (let i = 0; i < 250; i++) {
+			if ((await catalogue.values()).every((e) => e.manifest)) break;
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		for (const e of await catalogue.values()) {
+			await catalogue.set(`${e.peerId}|${e.protocol}`, { ...e, manifest: change(e.manifest) });
+		}
+	}
+	return { consumer, consumerNode, peer: providerNode.peerId.toString(), editManifest };
 }
 
 /**
@@ -190,11 +212,23 @@ describe('a provider that states 1 MiB', () => {
 	test('the consumer reads the manifest first when the catalogue has none yet', async () => {
 		const providerNode = await memoryNode('provider');
 		await bridge(providerNode, { request: MiB });
-		const { consumer, peer } = await consumerOf(providerNode, { request: MiB });
-		// What identify found, without the manifest it fetches in the background.
-		for (const e of await consumer.catalogue()) e.manifest = null;
+		const { consumer, peer, editManifest } = await consumerOf(providerNode, { request: MiB });
+		// What identify found, without the manifest.
+		await editManifest(() => null);
+		assert.equal((await consumer.catalogue())[0].manifest, null);
 		const answer = await consumer.call(peer, 'belege-bridge', 'read', { text: LONG });
 		assert.equal(answer.chars, LONG.length);
+	});
+
+	test('limitsFor with refresh reads the manifest again, not the catalogue’s copy', async () => {
+		const providerNode = await memoryNode('provider');
+		await bridge(providerNode, { request: MiB });
+		const { consumer, peer, editManifest } = await consumerOf(providerNode, { request: MiB });
+		assert.equal((await consumer.limitsFor(peer, 'belege-bridge')).request, MiB);
+		// A copy from before the provider stated its limits.
+		await editManifest((m) => ({ ...m, limits: undefined }));
+		assert.equal((await consumer.limitsFor(peer, 'belege-bridge')).request, LIMITS.request);
+		assert.equal((await consumer.limitsFor(peer, 'belege-bridge', { refresh: true })).request, MiB);
 	});
 
 	test('it refuses a length prefix above its limit before buffering, and waits below it', async () => {
