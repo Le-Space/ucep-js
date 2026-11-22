@@ -79,7 +79,7 @@ await consumer.limitsFor(peerId, 'belege-bridge'); // { request: 1048576, respon
 ```
 
 - The provider states the limits in the manifest's `limits`, reads requests up to them and refuses a longer length prefix before buffering it. It may not state less than the defaults.
-- The consumer sends and reads at most `min(its own, the stated limit)`; the defaults where the provider states none (an older provider) or the consumer sets none. It reads the manifest first when a request needs more than it knows of. A request over the limit fails **locally** with `UcepError` `TOO_LARGE` (its `limit` says the bytes allowed), before anything is sent; an answer over it fails with `TOO_LARGE` too.
+- The consumer sends and reads at most `min(its own, the stated limit)`; the defaults where the provider states none (an older provider) or the consumer sets none. It reads the manifest first when a request needs more than it knows of. A request over the limit fails **locally** with `UcepError` `TOO_LARGE` (its `limit` says the bytes allowed, `part` is `'request'`), before anything is sent; an answer over it fails with `TOO_LARGE` too.
 - On a **limited** connection (relayed, with a data limit below `RELAY_BUDGET`) 64 KiB holds both ways, whatever the manifest says: the consumer fails with `TOO_LARGE`, `open a direct connection first`.
 - Security: a bigger limit lets any peer that can open the stream make the provider buffer that much, eight streams at a time. State one only for peers admitted before the protocol, for example behind a gate of known devices, and only as big as the extension needs.
 

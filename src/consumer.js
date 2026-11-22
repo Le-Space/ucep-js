@@ -153,7 +153,8 @@ export function createConsumer({
 		const size = ext.Request.encode(request).length;
 		if (size > allowed.request) {
 			throw new UcepError('TOO_LARGE', `request of ${size} bytes, at most ${allowed.request}`, {
-				limit: allowed.request
+				limit: allowed.request,
+				part: 'request'
 			});
 		}
 		const s = signal ?? AbortSignal.timeout(TIMEOUTS.answer);
@@ -179,7 +180,8 @@ export function createConsumer({
 		if (size > LIMITS.request && isLimited(via)) {
 			stream.abort(new Error('request too large for a limited connection'));
 			throw new UcepError('TOO_LARGE', 'open a direct connection first', {
-				limit: LIMITS.request
+				limit: LIMITS.request,
+				part: 'request'
 			});
 		}
 		try {
@@ -193,7 +195,8 @@ export function createConsumer({
 			const name = /** @type {any} */ (error)?.name;
 			if (name === 'InvalidDataLengthError' || name === 'InvalidDataLengthLengthError') {
 				throw new UcepError('TOO_LARGE', `answer longer than ${allowed.response} bytes`, {
-					limit: allowed.response
+					limit: allowed.response,
+					part: 'response'
 				});
 			}
 			throw error;

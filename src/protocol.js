@@ -157,12 +157,14 @@ export class UcepError extends Error {
 	/**
 	 * @param {string} code an ErrorCode name, e.g. PAIRING_REQUIRED
 	 * @param {string} [message]
-	 * @param {{ limit?: number }} [details] `limit`: for TOO_LARGE, the bytes that were allowed
+	 * @param {{ limit?: number, part?: 'request' | 'response' }} [details] for a TOO_LARGE the
+	 *   consumer found itself: `limit`, the bytes that were allowed, and `part`, what was too large
 	 */
 	constructor(code, message = code, details = {}) {
 		super(message);
 		this.name = 'UcepError';
 		this.code = code;
 		if (details.limit !== undefined) this.limit = details.limit;
+		if (details.part !== undefined) this.part = details.part;
 	}
 }

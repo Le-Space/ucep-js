@@ -170,7 +170,8 @@ describe('a provider that states 1 MiB', () => {
 		const { consumer, peer } = await consumerOf(providerNode);
 		await assert.rejects(consumer.call(peer, 'belege-bridge', 'read', { text: LONG }), {
 			code: 'TOO_LARGE',
-			limit: LIMITS.request
+			limit: LIMITS.request,
+			part: 'request'
 		});
 		assert.deepEqual(received, []);
 	});
@@ -216,7 +217,8 @@ describe('a provider that states 1 MiB', () => {
 		);
 		const narrow = await consumerOf(providerNode);
 		await assert.rejects(narrow.consumer.call(narrow.peer, 'belege-bridge', 'answer', big), {
-			code: 'TOO_LARGE'
+			code: 'TOO_LARGE',
+			part: 'response'
 		});
 	});
 });
