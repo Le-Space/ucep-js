@@ -22,6 +22,7 @@ import {
 	UcepError,
 	isLimited,
 	isScope,
+	ownLimits,
 	protocolId
 } from './protocol.js';
 import { memoryStore } from './store.js';
@@ -109,6 +110,11 @@ const MAX_DONE_PER_PEER = 256;
  * @param {{ grants?: import('./store.js').KeyValue<Grant>, invitations?: import('./store.js').KeyValue<StoredInvitation> }} [init.store]
  * @param {number} [init.grantLifetimeMs] 0: grants do not expire
  * @param {() => number} [init.now] ms
+ * @param {Partial<import('./protocol.js').MessageLimits>} [init.limits] larger limits for this
+ *   extension, stated in the manifest (ucep.md §11.1); never below the defaults. They do not hold
+ *   on a limited connection, where 64 KiB does. State more only for peers admitted before the
+ *   protocol (a gate of known devices): any peer that opens the stream can make the provider
+ *   buffer that much.
  */
 export function createProvider({
 	libp2p,
@@ -118,9 +124,18 @@ export function createProvider({
 	confirmInvitations = false,
 	store = {},
 	grantLifetimeMs = 0,
-	now = () => Date.now()
+	now = () => Date.now(),
+	limits: wanted
 }) {
 	const protocol = protocolId(manifest.id, manifest.version);
+	const limits = ownLimits(wanted, { floor: true });
+	const stated =
+		limits.request > LIMITS.request || limits.response > LIMITS.response
+			? {
+					request: limits.request > LIMITS.request ? limits.request : 0,
+					response: limits.response > LIMITS.response ? limits.response : 0
+				}
+			: undefined;
 	const scopes = manifest.scopes ?? [];
 	for (const s of scopes) {
 		if (!isScope(s.name, manifest.id)) throw new Error(`Scope ${s.name} is not of ${manifest.id}`);
@@ -200,7 +215,8 @@ export function createProvider({
 			})),
 			ucepVersion: UCEP_VERSION,
 			pairingModes,
-			scopes
+			scopes,
+			...(stated ? { limits: stated } : {})
 		};
 	}
 
@@ -497,7 +513,7 @@ export function createProvider({
 			return fail('INTERNAL');
 		}
 		const text = data === undefined ? undefined : JSON.stringify(data);
-		const max = limited ? LIMITS.limitedResponse : LIMITS.response;
+		const max = limited ? LIMITS.limitedResponse : limits.response;
 		if (text !== undefined && new TextEncoder().encode(text).length > max - 256) {
 			return fail('TOO_LARGE', limited ? 'open a direct connection first' : '');
 		}
@@ -553,7 +569,10 @@ export function createProvider({
 	 * @param {import('@libp2p/interface').Connection} connection
 	 */
 	async function handle(stream, connection) {
-		const pb = pbStream(stream, { maxDataLength: LIMITS.request });
+		// A longer length prefix is refused before anything is buffered (§11);
+		// on a limited connection the stated limits do not hold (§11.1).
+		const maxDataLength = isLimited(connection) ? LIMITS.request : limits.request;
+		const pb = pbStream(stream, { maxDataLength });
 		let req;
 		try {
 			req = await pb.read(ext.Request, { signal: AbortSignal.timeout(TIMEOUTS.read) });
@@ -577,6 +596,8 @@ export function createProvider({
 	return {
 		protocol,
 		events,
+		/** The limits this extension states and enforces off limited connections. */
+		limits: Object.freeze({ ...limits }),
 
 		async start() {
 			await libp2p.handle(protocol, handle, { runOnLimitedConnection: true, maxInboundStreams: 8 });

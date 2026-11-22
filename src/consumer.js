@@ -21,7 +21,10 @@ import {
 	UCEP_VERSION,
 	UcepError,
 	compatible,
-	parseProtocolId
+	isLimited,
+	ownLimits,
+	parseProtocolId,
+	statedLimits
 } from './protocol.js';
 import { memoryStore } from './store.js';
 import {
@@ -69,6 +72,9 @@ const UPGRADE_INTERVAL_MS = 60_000;
  * @param {(transcriptHash: Uint8Array) => Promise<import('./did.js').DidProof>} [init.signDid] proves `did`
  * @param {{ grants?: import('./store.js').KeyValue<ConsumerGrant>, catalogue?: import('./store.js').KeyValue<CatalogueEntry> }} [init.store]
  * @param {() => number} [init.now]
+ * @param {Partial<import('./protocol.js').MessageLimits>} [init.limits] the most this consumer
+ *   sends and reads; a call uses min(these, what the provider's manifest states), and the
+ *   defaults of ucep.md §11 where it states none (§11.1). Without it: the defaults.
  */
 export function createConsumer({
 	libp2p,
@@ -76,8 +82,10 @@ export function createConsumer({
 	did = '',
 	signDid,
 	store = {},
-	now = () => Date.now()
+	now = () => Date.now(),
+	limits: wanted
 }) {
+	const own = ownLimits(wanted);
 	/** @type {import('./store.js').KeyValue<ConsumerGrant>} */
 	const grants = store.grants ?? memoryStore();
 	/** @type {import('./store.js').KeyValue<CatalogueEntry>} */
@@ -134,10 +142,20 @@ export function createConsumer({
 	 * @param {string | import('@libp2p/interface').PeerId} peer
 	 * @param {string} protocol
 	 * @param {any} request
-	 * @param {{ signal?: AbortSignal, addrs?: string[] }} [options]
+	 * @param {{ signal?: AbortSignal, addrs?: string[], limits?: import('./protocol.js').MessageLimits }} [options]
+	 *   `limits`: what this exchange may send and read off a limited connection; without it the defaults
 	 */
-	async function exchange(peer, protocol, request, { signal, addrs = [] } = {}) {
+	async function exchange(peer, protocol, request, { signal, addrs = [], limits } = {}) {
 		const id = typeof peer === 'string' ? peerIdFromString(peer) : peer;
+		const allowed = limits ?? { request: LIMITS.request, response: own.response };
+		// Too large is said here, before anything is sent: a provider would
+		// only reset the stream (ucep.md §11.1).
+		const size = ext.Request.encode(request).length;
+		if (size > allowed.request) {
+			throw new UcepError('TOO_LARGE', `request of ${size} bytes, at most ${allowed.request}`, {
+				limit: allowed.request
+			});
+		}
 		const s = signal ?? AbortSignal.timeout(TIMEOUTS.answer);
 		const target = addrs.length ? addrs.map((a) => multiaddr(a)) : id;
 		const existing = reusable(id);
@@ -156,14 +174,28 @@ export function createConsumer({
 					if (!open) throw error;
 					return open.newStream(protocol, { runOnLimitedConnection: true, signal: s });
 				}));
+		// On a limited connection the stated limits do not hold: 64 KiB both ways.
+		const via = libp2p.getConnections(id).find((c) => c.streams?.includes(stream));
+		if (size > LIMITS.request && isLimited(via)) {
+			stream.abort(new Error('request too large for a limited connection'));
+			throw new UcepError('TOO_LARGE', 'open a direct connection first', {
+				limit: LIMITS.request
+			});
+		}
 		try {
-			const pb = pbStream(stream, { maxDataLength: LIMITS.response });
+			const pb = pbStream(stream, { maxDataLength: allowed.response });
 			await pb.write(request, ext.Request, { signal: s });
 			const response = await pb.read(ext.Response, { signal: s });
 			await stream.close({ signal: s }).catch(() => {});
 			return response;
 		} catch (error) {
 			stream.abort(error instanceof Error ? error : new Error(String(error)));
+			const name = /** @type {any} */ (error)?.name;
+			if (name === 'InvalidDataLengthError' || name === 'InvalidDataLengthLengthError') {
+				throw new UcepError('TOO_LARGE', `answer longer than ${allowed.response} bytes`, {
+					limit: allowed.response
+				});
+			}
 			throw error;
 		}
 	}
@@ -264,6 +296,29 @@ export function createConsumer({
 		const best = entries.sort((a, b) => (a.version < b.version ? 1 : -1))[0];
 		if (!best) throw new UcepError('UNKNOWN_EXTENSION', `${peer} does not serve ${extensionId}`);
 		return best.protocol;
+	}
+
+	/**
+	 * What a call to this protocol may send and read off a limited connection:
+	 * min(own, the manifest's stated limits), the defaults where it states none
+	 * or is not known (ucep.md §11.1).
+	 *
+	 * @param {string} peer
+	 * @param {string} protocol
+	 * @param {{ fetch?: boolean, refresh?: boolean }} [options] `fetch`: ask for the manifest
+	 *   when the catalogue has none; `refresh`: ask for it anyway
+	 * @returns {Promise<import('./protocol.js').MessageLimits>}
+	 */
+	async function limitsOf(peer, protocol, { fetch = false, refresh = false } = {}) {
+		let manifest = refresh ? null : ((await catalogue.get(key(peer, protocol)))?.manifest ?? null);
+		if (!manifest && (fetch || refresh)) {
+			manifest = await fetchManifest(peer, protocol).catch(() => null);
+		}
+		const stated = statedLimits(manifest);
+		return {
+			request: Math.min(own.request, stated.request),
+			response: Math.min(own.response, stated.response)
+		};
 	}
 
 	/** @param {any} res */
@@ -375,6 +430,22 @@ export function createConsumer({
 
 		fetchManifest,
 
+		/** The most this consumer sends and reads, its `limits` option. */
+		limits: Object.freeze({ ...own }),
+
+		/**
+		 * What a call of the extension on the peer may send and read, off a
+		 * limited connection: min(own, the provider's stated limits), the
+		 * defaults where it states none. On a limited connection 64 KiB holds.
+		 *
+		 * @param {string} peer
+		 * @param {string} extensionId
+		 * @param {{ version?: string, fetch?: boolean }} [options] `fetch`: ask for the manifest when it is not known yet
+		 */
+		async limitsFor(peer, extensionId, { version, fetch = true } = {}) {
+			return limitsOf(peer, await protocolOf(peer, extensionId, version), { fetch });
+		},
+
 		/**
 		 * "Add by PeerId or link" (ucep.md §4.2): dial, identify, list what the
 		 * provider serves. Nothing is installed or paired.
@@ -440,21 +511,29 @@ export function createConsumer({
 		async call(peer, extensionId, command, args = {}, { requestId, version, signal } = {}) {
 			const protocol = await protocolOf(peer, extensionId, version);
 			const id = requestId ?? toBase64url(randomBytes(16));
-			const res = await exchange(
-				peer,
-				protocol,
-				{
-					command: {
-						requestId: id,
-						extensionId,
-						command,
-						args: Array.isArray(args) ? args : [],
-						argsJson: Array.isArray(args) ? undefined : JSON.stringify(args),
-						timestamp: BigInt(now())
-					}
-				},
-				signal ? { signal } : {}
-			);
+			const request = {
+				command: {
+					requestId: id,
+					extensionId,
+					command,
+					args: Array.isArray(args) ? args : [],
+					argsJson: Array.isArray(args) ? undefined : JSON.stringify(args),
+					timestamp: BigInt(now())
+				}
+			};
+			// The limits come from the catalogue's manifest. It is asked for when
+			// the catalogue has none and the consumer would read more than the
+			// default, and again when the request needs more than the copy allows
+			// and the consumer would send more: the provider may have raised them.
+			const size = ext.Request.encode(request).length;
+			let limits = await limitsOf(peer, protocol, { fetch: own.response > LIMITS.response });
+			if (size > limits.request && own.request > limits.request) {
+				limits = await limitsOf(peer, protocol, { refresh: true });
+			}
+			const res = await exchange(peer, protocol, request, {
+				limits,
+				...(signal ? { signal } : {})
+			});
 			const c = res.command;
 			if (!c || c.requestId !== id) throw new UcepError('INTERNAL', 'answer to another request');
 			if (!c.success) {

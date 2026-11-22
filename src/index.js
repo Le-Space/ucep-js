@@ -14,6 +14,7 @@ export {
 	isLimited,
 	isScope,
 	parseProtocolId,
+	statedLimits,
 	protocolId
 } from './protocol.js';
 export {

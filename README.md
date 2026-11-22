@@ -67,6 +67,22 @@ const result = await consumer.call(peerId, 'invoice', 'create-eigenbeleg', { rea
 
 Through a relay (two browsers), the consumer reuses the connection it has: libp2p would open a new relayed connection for every call, and a provider refuses more than five a second from the relay's address. Once a minute per peer it lets libp2p dial anyway, which may come back direct (WebRTC).
 
+## Limits per extension
+
+By default a request may be 64 KiB and an answer 1 MiB (ucep.md §11). An extension that needs more states it in its manifest (§11.1):
+
+```js
+const provider = createProvider({ libp2p, manifest, commands, limits: { request: 1024 * 1024 } });
+
+const consumer = createConsumer({ libp2p, label: 'Belege, Laptop', limits: { request: 1024 * 1024 } });
+await consumer.limitsFor(peerId, 'belege-bridge'); // { request: 1048576, response: 1048576 }
+```
+
+- The provider states the limits in the manifest's `limits`, reads requests up to them and refuses a longer length prefix before buffering it. It may not state less than the defaults.
+- The consumer sends and reads at most `min(its own, the stated limit)`; the defaults where the provider states none (an older provider) or the consumer sets none. It reads the manifest first when a request needs more than it knows of. A request over the limit fails **locally** with `UcepError` `TOO_LARGE` (its `limit` says the bytes allowed), before anything is sent; an answer over it fails with `TOO_LARGE` too.
+- On a **limited** connection (relayed, with a data limit below `RELAY_BUDGET`) 64 KiB holds both ways, whatever the manifest says: the consumer fails with `TOO_LARGE`, `open a direct connection first`.
+- Security: a bigger limit lets any peer that can open the stream make the provider buffer that much, eight streams at a time. State one only for peers admitted before the protocol, for example behind a gate of known devices, and only as big as the extension needs.
+
 Grants and the catalogue live in memory by default; pass `store` with your own key-value stores to keep them across restarts (the spec asks for it, together with a stable libp2p key).
 
 ## Tests
@@ -78,6 +94,7 @@ npm test
 - the spec's test vectors (invitation URI, transcripts, proofs, codes, DID signatures);
 - DID binding with fresh Ed25519 and P-256 keys, including a passkey assertion;
 - two and three real libp2p nodes over the in-memory transport (Noise, Yamux, identify): discovery and manifest, scopes and error codes, idempotency, both pairing modes, a DID bound and a DID faked, revocation and unpairing, a provider going offline and an extension withdrawn;
+- limits per extension: a provider stating 1 MiB and consumers with and without a limit of their own, an older provider stating none, a request over the limit failing locally, a longer length prefix refused before buffering, a limited relayed connection at 64 KiB and a generous relay carrying the stated limit;
 - hardening: two peers racing for one invitation, a grant revoked while its command runs, a retry while an idempotent command still runs, the bound on kept results, approving without the code, an overlong `did:key`.
 
 ## Protobuf
